@@ -17,6 +17,13 @@ _center = np.array([-1309.21, -1258.16])  # by default, will be replaced if ther
 _scale  = 100.  # fixed for Jovian 
 float_pattern = r'([-+]?\d*\.?\d+|[-+]?\d+)' # regexp for float number
 
+# sync_seq is the timing (seconds) of the ephys sync output, each sync pulse is 100 ms long 
+# sync pulse is logged as 'sync_counter' add one by each sync pulse
+sync_seq = np.array([0,    1,    3,    64,   105,  181,  266,  284,  382,  469,  531,
+	                 545,  551,  614,  712,  726,  810,  830,  846,  893,  983,  1024,
+	                 1113, 1196, 1214, 1242, 1257, 1285, 1379, 1477, 1537, 1567, 1634,
+	                 1697, 1718, 1744, 1749, 1811, 1862, 1917, 1995, 2047])
+
 def create_logger():
     multiprocessing.log_to_stderr()
     logger = multiprocessing.get_logger()
@@ -28,9 +35,40 @@ def create_logger():
     logger.addHandler(fh)
     return logger
 
+def extract_trials(jov_data):
+    '''
+    extract trials from jovian data 
+
+    Usage:
+        log = logger('process.log')
+        jov_data = log.get_jov()
+        trials = extract_trials(jov_data)
+
+        @interact(trial_idx=(0, len(trials) - 1))
+        def plot_trial(trial_idx=0):
+            plot_trajectory_with_speed(trials[trial_idx])
+    '''
+    trials = []
+    reward_indices = jov_data['jov_reward_index']
+    n_trials = len(reward_indices) - 1
+
+    for i in range(n_trials):
+        start_idx = reward_indices[i] + 1
+        end_idx = reward_indices[i + 1]
+
+        trial_data = {'jov_ts': jov_data['jov_ts'][start_idx:end_idx],
+                      'jov_pos': jov_data['jov_pos'][start_idx:end_idx],
+                      'jov_hd': jov_data['jov_hd'][start_idx:end_idx],
+                      'jov_ball_vel': jov_data['jov_ball_vel'][start_idx:end_idx],
+                      'jov_cue_pos': jov_data['jov_cue_pos'][start_idx:end_idx]}
+
+        if trial_data['jov_ts'].shape[0]>0: # don't append empty trials
+            trials.append(trial_data)
+
+    return trials
 
 class logger():
-    def __init__(self, filename):
+    def __init__(self, filename, sync=True):
         """Load playground log file and extract BMI/Jovian/Sync data.
 
         Args:
@@ -80,7 +118,7 @@ class logger():
                     func.append('sync')
                     msg.append('last message is synced')
 
-        print(f'Creating major data frame log.df and severl sub-dataframes', end='...')
+        print(f'Creating major data frame log.df and severl sub-dataframes ...')
         self.df = pd.DataFrame(
             {'time': time,
              'process': process,
@@ -89,49 +127,99 @@ class logger():
              'msg': msg
             })
 
-        self.cue_df = self.select(func='_jovian', msg='cue_pos')
-        self.cue_idx = self.cue_df.index  # index of cue position data in the log dataframe (report by _jovian process in playground)
-        self.jov_df = self.select(func='_jovian').drop(self.cue_df.index)
-        self.jov_idx = self.jov_df.index  # index of jovian animal position data in the log dataframe (report by _jovian process in playground)
         self.reward_df = self.select(func='touched', msg='reward')
         self.touch_df = self.select(func='', msg='touch:')
-        print('Done')
 
-        if len(SY) == 0:
-            print('Critical warning: no SYNC signal found')
-            self.sync_time = None
+        if len(self.select(func='read_routine')) == 0:
+            self.cue_df = self.select(func='_jovian', msg='cue_pos')
+            self.cue_idx = self.cue_df.index  # index of cue position data in the log dataframe (report by `_jovian process` in playground)
+            self.jov_df = self.select(func='_jovian').drop(self.cue_df.index)
+            self.jov_idx = self.jov_df.index  # index of jovian animal position data in the log dataframe (report by _jovian process in playground)
+            print('parse version 2 (>= 0802_2022) log file, get cue_df, jov_df, reward_df, touch_df')
         else:
-            print('Find SYNC, syncing the data', end='...')
-            self.sync_time = int(SY[0].split(',')[0])
-            self.sync_idx = self.select(func='sync').index - 1 # index of jov timestamps that is exactly same as SY
-            self.sync_df = self.df.loc[self.sync_idx]
-            self.jov_idx = self.jov_idx[self.jov_idx >= self.sync_idx[0]]  # only use jovian data after the sync time
-            self.jov_df = self.jov_df.loc[self.jov_idx]
-            self.cue_idx = self.cue_idx[self.cue_idx > self.jov_idx[0]]    # only use cue data after the first jovian data
-            self.cue_df = self.cue_df.loc[self.cue_idx]
-            self.reward_df = self.reward_df[self.reward_df.index > self.jov_idx[0]]
-            self.touch_df = self.touch_df[self.touch_df.index > self.jov_idx[0]]
-            print('Done')
+            self.cue_df = self.select(func='read_routine', msg='cue_pos')
+            self.cue_idx = self.cue_df.index  # index of cue position data in the log dataframe (report by `read_routine` in playground)
+            self.jov_df = self.select(func='read_routine', msg='ani_pos')
+            self.jov_idx = self.jov_df.index  # index of jovian animal position data in the log dataframe (report by _jovian process in playground)
+            print('parse version 1 (< 0802_2022) log file, get cue_df, jov_df, reward_df, touch_df')   
 
-        print(f'Finalizing all sub-dataframes', end='...')
-        self.jov_pos_df = self.jov_df.msg.str.extractall(float_pattern).unstack().astype('float')
-        self.jov_pos_df.columns = ['jov_time', 'jov_x', 'jov_y', 'jov_z', 'jov_hd', 'jov_ball_vel']
-        self.cue_pos_df = self.cue_df.msg.str.extractall(float_pattern).unstack().astype('float')
-        self.cue_pos_df.columns = ['cue1_x', 'cue1_y', 'cue1_z', 'cue2_x', 'cue2_y', 'cue2_z']
+        if sync:
+            # if len(SY) == 0:
+            #     print('Critical warning: no SYNC signal found')
+            #     self.sync_time = None
+            # else:
+            # if len(SY) > 0:
+            #     self.sync_time = int(SY[0].split(',')[0].replace('ani_pos: ', ''))
+            if self.select(func='sync').shape[0] > 0:
+                print('Find SYNC, syncing the data', end='...')
+                self.sync_df = self.select(func='sync') # self.df.loc[self.sync_idx]
+                self.sync_idx = self.sync_df.index - 1 # index of jov timestamps that is exactly same as SY
+                self.jov_idx = self.jov_idx[self.jov_idx >= self.sync_idx[0]]  # only use jovian data after the sync time
+                self.jov_df = self.jov_df.loc[self.jov_idx]
+                self.cue_idx = self.cue_idx[self.cue_idx > self.jov_idx[0]]    # only use cue data after the first jovian data
+                self.cue_df = self.cue_df.loc[self.cue_idx]
+                self.reward_df = self.reward_df[self.reward_df.index > self.jov_idx[0]]
+                self.touch_df = self.touch_df[self.touch_df.index > self.jov_idx[0]]
+                print('Done')
 
-        self.dfs = {'jov_df': self.jov_df,
-                    'jov_pos_df': self.jov_pos_df,
-                    'cue_df': self.cue_df,
-                    'reward_df': self.reward_df,
-                    'touch_df': self.touch_df}
-        print('Done')
-        print('Please check log.df, log.jov_pos_df, log.cue_df, log.reward_df, log.touch_df')
+                print(f'Finalizing all sub-dataframes', end='...')
+                self.jov_pos_df = self.jov_df.msg.str.extractall(float_pattern).unstack().astype('float')
+                self.jov_pos_df.columns = ['jov_time', 'jov_x', 'jov_y', 'jov_z', 'jov_hd', 'jov_ball_vel']
+                self.cue_pos_df = self.cue_df.msg.str.extractall(float_pattern).unstack().astype('float')
+                self.cue_pos_df.columns = ['cue1_x', 'cue1_y', 'cue1_z', 'cue2_x', 'cue2_y', 'cue2_z']
+
+                self.dfs = {'jov_df': self.jov_df,
+                            'jov_pos_df': self.jov_pos_df,
+                            'cue_df': self.cue_df,
+                            'reward_df': self.reward_df,
+                            'touch_df': self.touch_df}
+                print('Done')
+                print('Please check log.df, log.jov_pos_df, log.cue_df, log.reward_df, log.touch_df')
 
         self.log_sessions = self.get_log_sessions()
         self.n_sessions   = len(self.log_sessions)
         self.trial_index = None
         # print('{} sessions found'.format(self.n_sessions))
 
+    def get_log_time(self, df, diff=False, sort=False):
+        log_time = pd.to_datetime(df.time)
+        log_time = np.array([(log_time.iloc[i] - log_time.iloc[0]).total_seconds()
+                                    for i in range(len(log_time))])
+        if diff:
+            log_time_diff = np.diff(log_time)
+            if sort:
+                return np.sort(log_time_diff)
+            else:
+                return log_time_diff
+        else:
+            return log_time
+
+    @property
+    def sync_seq(self):
+        '''
+        received sync_seq (seconds) corresponding to the the ephys time
+        '''
+        self._sync_seq = self.get_log_time(self.sync_df).round().astype(int)
+        return self._sync_seq
+
+    @property
+    def IRI(self):
+        '''
+        Inter-reward interval (seconds)
+        '''
+        self._IRI = self.get_log_time(self.reward_df, diff=True, sort=False)
+        return self._IRI
+
+    @property
+    def jov_loop_delay(self):
+        '''
+        the time spent on each jovian loop: a single call of `_jovian_process` function:
+        each loop contains three major functions:
+        - sync_routine() : read the sync signal from the ephys to the log
+        - read_routine() : read the vr signal (ani_pos, cue_pos etc) to the log
+        - task_routine() : use the real-time vr signal to guide the task state transition
+        '''
+        return self.select(func='jovian', msg='ms', numpy=True)[:,1]
 
     @property
     def session_id(self):
@@ -143,6 +231,8 @@ class logger():
         self.df = self.log_sessions[self.session_id]
         print('session {} loaded into the dataframe'.format(self._session_id))
 
+    def total_sedonds(self, df):
+        return (pd.to_datetime(df.time.iloc[-1]) - pd.to_datetime(df.time.iloc[0])).total_seconds()
 
     def get_log_sessions(self):
         log = self.df
@@ -161,25 +251,52 @@ class logger():
         Returns:
             (ts, pos, hd, ball_vel, cue_pos, reward_time): tuple of numpy arrays
         """
-        jov = self.jov_pos_df.to_numpy()
+        jov = self.jov_pos_df.to_numpy().copy()
         t = jov[:, 0]
         self._jov_ts = (t - t[0])/1e3
         self._jov_pos = self.convert_jov_pos(jov[:, 1:3])
         self._jov_hd = jov[:, -2]
         self._jov_ball_vel = jov[:, -1]
-        self._jov_reward_time = self.jov_pos_df.iloc[self.jov_pos_df.index.searchsorted(self.reward_df.index)-1].jov_time.to_numpy()
+        self._jov_reward_index = self.jov_pos_df.index.searchsorted(self.reward_df.index) - 1
+        self._jov_reward_time = self.jov_pos_df.iloc[self._jov_reward_index].jov_time.to_numpy()
         self._jov_reward_time = (self._jov_reward_time - t[0])/1e3
-        cue_pos = self.cue_pos_df.to_numpy()
+
+        cue_pos = self.cue_pos_df.to_numpy().copy()
         cue_pos[:, 0:2] = self.convert_jov_pos(cue_pos[:, :2])
         cue_pos[:, 3:5] = self.convert_jov_pos(cue_pos[:, 3:5])
         self._jov_cue_pos = cue_pos
+
+        mins, secs = self.get_jov_duration() # save total seconds in self._jov_duration
+
         jov_dict =  {'jov_ts': self._jov_ts, 
                      'jov_pos': self._jov_pos, 
                      'jov_hd': self._jov_hd,
-                     'jov_ball_vell': self._jov_ball_vel, 
+                     'jov_ball_vel': self._jov_ball_vel, 
                      'jov_cue_pos': self._jov_cue_pos, 
-                     'jov_reward_time': self._jov_reward_time}
+                     'jov_reward_index': self._jov_reward_index,
+                     'jov_reward_time': self._jov_reward_time,
+                     'jov_duration': self._jov_duration}
         return jov_dict
+
+    def get_jov_duration(self):
+        """
+        get the duration of each jovian loop
+        """
+        df = self.jov_df
+        # get the first and last time of log.jov_df in log.jov_df.time
+        first_time = df.time.iloc[0]
+        last_time = df.time.iloc[-1]
+        # convert string to date_time type and calculate the duration
+        first_time = pd.to_datetime(first_time)
+        last_time = pd.to_datetime(last_time)
+        duration = last_time - first_time
+        # convert duration to minutes and seconds
+        duration = duration.total_seconds()
+        self._jov_duration = duration
+        mins, secs = divmod(duration, 60)
+        # secs only keep 2 decimal places
+        secs = round(secs, 1)
+        return mins, secs
 
     def to_trajectory(self, session_id=0, target='', interpolate=True, to_zero_center_coord=True, ball_movement=False):
         """
@@ -248,13 +365,15 @@ class logger():
             else:
                 return ts, pos, None
 
-    def to_pc(self, session_id=0, dt=0.1, bin_size=2.5, v_cutoff=5):
+    def to_pc(self, session_id=0, dt=0.1, bin_size=4, v_cutoff=4):
         from spiketag.analysis import place_field
         jov_dict = self.get_jov()
-        ts, pos, cue_pos = jov_dict['jov_ts'], jov_dict['jov_pos'], jov_dict['jov_cue_pos']
+        ts, pos, cue_pos, hd, ball_v = jov_dict['jov_ts'], jov_dict['jov_pos'], jov_dict['jov_cue_pos'], jov_dict['jov_hd'], jov_dict['jov_ball_vel']
         pc = place_field(ts=ts, pos=pos, bin_size=bin_size, v_cutoff=v_cutoff, maze_range=self.maze_range)
         pc.cue_ts  = ts
         pc.cue_pos = cue_pos
+        pc.hd = hd
+        pc.ball_v = ball_v
         pc(dt)
         return pc
 
@@ -319,10 +438,15 @@ class logger():
         jov_pos = pos/_scale + self.maze_center
         return np.round(jov_pos, 2) + 0.01
 
-    def select(self, func='', msg=''):
+    def select(self, func='', msg='', numpy=False):
         df = self.df[self.df.func.str.contains(func)]
         df = df[df.msg.str.contains(msg)]
-        return df
+
+        if numpy:
+            arr = df.msg.str.extractall(float_pattern).astype('float').unstack().to_numpy()
+            return arr
+        else:
+            return df
 
     def extractall(self, expr=r'([-+]?\d*\.?\d+|[-+]?\d+)', dtype='float', level='INFO', proc='', func='', msg=''):
         '''
@@ -432,6 +556,7 @@ class logger():
         self.bin_len = bmi_params['bin_window']
         self.dec_len = bmi_params['decoding_window']
         bmi_output_ephys_time = (bin_index + 1) * self.bin_len
+        bmi_pos_df = bmi_pos_df.iloc[:bmi_output_ephys_time.shape[0]]
         bmi_pos_df.insert(0, column='ephys_time', value=bmi_output_ephys_time)
 
         # find jov output in the jov_df that just before bmi output index in bmi_pos_df

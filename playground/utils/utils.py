@@ -5,7 +5,9 @@ import re
 from collections import defaultdict
 from functools import partial
 from scipy.interpolate import interp1d
-
+from numba import jit, njit
+from spiketag.analysis import smooth
+from IPython import get_ipython
 
 ENABLE_PROFILER = False
 
@@ -30,6 +32,92 @@ def segment_trial_gaps(array):
                 segments.append([array[i]])
     return segments
 
+#------------------------------------------------------------------------------
+# smooth a 2d trajectory
+#------------------------------------------------------------------------------
+def smooth(x, window_len=60):
+    '''
+    moving weighted average
+    '''
+    if x.ndim == 1:
+        x = x.reshape(-1,1)
+    y = np.zeros((x.shape[0]-window_len+1, x.shape[1])) # window_len is the smooth_factor
+    box = np.ones((window_len,))
+    box = box/float(box.sum())
+    for i in range(y.shape[1]):
+        y[:,i] = np.convolve(x[:,i], box, mode='valid')
+    return y
+
+#------------------------------------------------------------------------------
+# simulate a random walk in 2D manner
+#------------------------------------------------------------------------------
+def randomwalk2D(n, init_pos=[0,0], x_range=[-50, 50], y_range=[-50, 50], max_speed=10, smooth_factor=5, dt=100e-3):
+    # run once to compile the code
+    pos, theta, speed = _randomwalk2D(
+        n, init_pos, x_range, y_range, max_speed, dt, smooth_factor) # return pos: (n+smooth_factor-1,2)
+    pos = smooth(pos, smooth_factor)                                 # return pos: (n,2) smoothed position
+    theta = smooth(theta, smooth_factor)                             # return theta: (n,1) smoothed theta
+    speed = smooth(speed, smooth_factor)                             # return speed: (n,1) smoothed speed
+    return pos, theta, speed
+
+@jit(cache=True)
+def _randomwalk2D(n, init_pos=[0, 0], x_range=[-50, 50], y_range=[-50, 50], max_speed=10, dt=100e-3, smooth_factor=5):
+    '''
+    Input:
+    n: number of points
+    x_range: range of x
+    y_range: range of y
+
+    Output:
+    pos: (n,2) array of positions
+    theta: (n,) head directions (angle)
+    speed: (n,) absolute speed at each (x, y)
+    '''
+    # by default, dt is 100ms and time_scale is 1
+    # the larger the dt is, the larger the time_scale is
+    # larger time_scale will make both the speed and the angle_shift at each step larger
+    # offset the boundary effect when using with smooth (np.convolve function)
+    n = n + smooth_factor -1
+
+    time_scale = dt/100e-3
+    angle_shift = 15 * time_scale
+    x = np.zeros(n,)
+    y = np.zeros(n,)
+    speed = np.zeros(n,)
+    theta = np.zeros(n,)
+    x[0] = init_pos[0]
+    y[0] = init_pos[1]
+
+    for i in range(1, n):
+        speed[i] += speed[i-1] + np.random.randn(1) * 2
+        if speed[i] <= 0:
+            speed[i] = 0
+        if speed[i] > max_speed:
+            speed[i] = max_speed
+
+        theta[i] += theta[i-1] + np.random.normal(0, 2) * angle_shift
+        delta_x = speed[i] * np.cos(theta[i]/360*np.pi*2) * time_scale
+        delta_y = speed[i] * np.sin(theta[i]/360*np.pi*2) * time_scale
+        x[i] = x[i-1] + delta_x
+        y[i] = y[i-1] + delta_y
+        
+        # check if out of range, if so, add larger variance to angle
+        if x[i] <= x_range[0] or x[i] >= x_range[1] or y[i] <= y_range[0] or y[i] >= y_range[1]:
+            angle_shift *= 2
+        else:
+            angle_shift = 15 * time_scale
+
+        if x[i] <= x_range[0]:
+            x[i] = x_range[0]
+        if x[i] >= x_range[1]:
+            x[i] = x_range[1]
+        if y[i] <= y_range[0]:
+            y[i] = y_range[0]
+        if y[i] >= y_range[1]:
+            y[i] = y_range[1]
+            
+    pos = np.stack((x, y)).T
+    return pos, theta, speed
 
 #------------------------------------------------------------------------------
 # Compare the content of two list/array in a orderless manner
@@ -122,27 +210,27 @@ def line_plane_intersection(rayDirection, rayPoint, planeNormal, planePoint, eps
 #------------------------------------------------------------------------------
 # 2d mouse event to 3d coordinate
 #------------------------------------------------------------------------------
-def pos2d_to_pos3d(pos, cam):
-    """Convert mouse event pos:(x, y) into x, y, z translations"""
-    """dist is the distance between (x,y) and (cx, cy) of cam"""
-    center = get_center_of_view(cam)
-    dist = pos - center
-    dist[1] *= -1
-    rae = np.array([cam.azimuth, cam.elevation]) * np.pi / 180
-    saz, sel = np.sin(rae)
-    caz, cel = np.cos(rae)
-    dx = (+ dist[0] * (1 * caz)
-          + dist[1] * (- 1 * sel * saz))
-    dy = (+ dist[0] * (1 * saz)
-          + dist[1] * (+ 1 * sel * caz))
-    dz = (+ dist[1] * 1 * cel)
+# def pos2d_to_pos3d(pos, cam):
+#     """Convert mouse event pos:(x, y) into x, y, z translations"""
+#     """dist is the distance between (x,y) and (cx, cy) of cam"""
+#     center = get_center_of_view(cam)
+#     dist = pos - center
+#     dist[1] *= -1
+#     rae = np.array([cam.azimuth, cam.elevation]) * np.pi / 180
+#     saz, sel = np.sin(rae)
+#     caz, cel = np.cos(rae)
+#     dx = (+ dist[0] * (1 * caz)
+#           + dist[1] * (- 1 * sel * saz))
+#     dy = (+ dist[0] * (1 * saz)
+#           + dist[1] * (+ 1 * sel * caz))
+#     dz = (+ dist[1] * 1 * cel)
 
-    # Black magic part 2: take up-vector and flipping into account
-    ff = cam._flip_factors
-    up, forward, right = cam._get_dim_vectors()
-    dx, dy, dz = right * dx + forward * dy + up * dz
-    dx, dy, dz = ff[0] * dx, ff[1] * dy, ff[2] * dz
-    return dx, dy, dz
+#     # Black magic part 2: take up-vector and flipping into account
+#     ff = cam._flip_factors
+#     up, forward, right = cam._get_dim_vectors()
+#     dx, dy, dz = right * dx + forward * dy + up * dz
+#     dx, dy, dz = ff[0] * dx, ff[1] * dy, ff[2] * dz
+#     return dx, dy, dz
 
 
 #------------------------------------------------------------------------------

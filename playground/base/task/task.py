@@ -74,6 +74,7 @@ class Task(object):
         self.animation = {}  # {"_dcue_000": deque([ (4, parachute), (60, vibrate) ]), "_dcue_111": deque([ (2, animation111) ])}
 
         self.reward_time = 1.0
+        self.touch_radius = 15
         self.BMI_enable = False
 
         # initial reset only after jov process start 
@@ -157,6 +158,15 @@ class Task(object):
             self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  z], target_item=cue_name)
             yield
 
+    def parachute_fast(self, cue_name, pos):
+        ''' usage:
+            self.animation['_dcue_000'] = deque([ (3, self.parachute('_dcue_000', self._coord_goal)) ])
+        '''
+        for z in range(20, 5, -2):
+            self.jov.teleport(prefix='model', target_pos=[
+                              pos[0],  pos[1],  z], target_item=cue_name)
+            yield
+
     def bury(self, cue_name):
         self.transition_enable.behave = False
         for z in range(0, -100, -2):
@@ -176,6 +186,42 @@ class Task(object):
             self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  0], target_item=cue_name)
             yield            
 
+    def s_vibrate(self, cue_name):
+        ''' usage:
+            self.animation['_dcue_001'] = deque([ (3, self.parachute('_dcue_001', self._coord_guide)), (30, self.vibrate('_dcue_001')) ])
+        '''
+        for z in range(30):
+            pos = self.jov._to_maze_coord(self.jov.shared_cue_dict[cue_name])
+            self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  5], target_item=cue_name)
+            yield
+            pos = self.jov._to_maze_coord(self.jov.shared_cue_dict[cue_name])
+            self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  0], target_item=cue_name)
+            yield            
+
+    def ss_vibrate(self, cue_name):
+        ''' usage:
+            self.animation['_dcue_001'] = deque([ (3, self.parachute('_dcue_001', self._coord_guide)), (30, self.vibrate('_dcue_001')) ])
+        '''
+        for z in range(5):
+            pos = self.jov._to_maze_coord(self.jov.shared_cue_dict[cue_name])
+            self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  5], target_item=cue_name)
+            yield
+            pos = self.jov._to_maze_coord(self.jov.shared_cue_dict[cue_name])
+            self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  0], target_item=cue_name)
+            yield            
+
+    def guiding(self, cue_name, s_pos,g_pos):
+        ''' usage:
+            self.animation['_dcue_000'] = deque([ (3, self.guiding('_dcue_000', self._coord_goal)) ])
+        ''' 
+        div=70
+        init_d=15
+        for i in range(init_d,div,2):
+            pos=(g_pos-s_pos)*i/div+s_pos
+            self.jov.teleport(prefix='model', target_pos=[pos[0],  pos[1],  5], target_item=cue_name)
+            yield
+
+
     def wander(self, cue_name, direction='x'):
         for i in range(20000):
             pos = self.jov._to_maze_coord(self.jov.shared_cue_dict[cue_name])
@@ -183,38 +229,41 @@ class Task(object):
             pos = pos[:2].astype(float)
             radius = np.linalg.norm(pos)
             print(radius)
-            if radius > 95:  # if direction=='x':
+            #if radius > 95:  # if direction=='x':
+            if radius > 45:  # if direction=='x':
                 print('outer loop')
                 _x = pos[0]
-                while _x>=-95:
-                    _x -= 5
+                #while _x>=-95:
+                while _x>=-45:
+                    _x -= 2
                     self.jov.teleport(prefix='model', target_pos=[_x,  pos[1],  0], target_item=cue_name)
                     yield
-                while _x<=95:
-                    _x += 5
+                #while _x<=95:
+                while _x<=45:
+                    _x += 2
                     self.jov.teleport(prefix='model', target_pos=[_x,  pos[1],  0], target_item=cue_name)
                     yield
             else: # direction=='circular':
                 print('inner loop')
                 _x, _y  = pos
                 _delta = 0.0
-                print(pos)
+                #print(pos)
                 theta = np.arctan(_y/_x)
-                print(theta)
+                #print(theta)
                 _delta = np.pi/64
                 while True:
-                    # theta  += _delta
-                    # self.target_x, self.target_y = radius*np.cos(theta),  radius*np.sin(theta)
-                    # self.head_v = np.arccos((self.target_y-self.last_y)/(self.target_x-self.last_x))*180/np.pi
-                    # self.jov.teleport(prefix='model', target_pos=[radius*np.cos(theta),  radius*np.sin(theta),  0], target_item=cue_name)
-                    # self.jov.teleport(prefix='console', target_pos=[self.target_x, self.target_y,  0])
-                    # self.jov.teleport(prefix='console', target_pos=[self.target_x, self.target_y,  0], head_direction=90-theta*180/np.pi)
+                    theta  += _delta
+                    self.target_x, self.target_y = radius*np.cos(theta),  radius*np.sin(theta)
+                    #self.head_v = np.arccos((self.target_y-self.last_y)/(self.target_x-self.last_x))*180/np.pi
+                    self.jov.teleport(prefix='model', target_pos=[radius*np.cos(theta),  radius*np.sin(theta),  0], target_item=cue_name)
+                    #self.jov.teleport(prefix='console', target_pos=[self.target_x, self.target_y,  0])
+                    #self.jov.teleport(prefix='console', target_pos=[self.target_x, self.target_y,  0], head_direction=90-theta*180/np.pi)
 
                     # test rotation
-                    hd = self.jov.cnt[0]%360 - 180
-                    print(hd)
+                    #hd = self.jov.cnt[0]%360 - 180
+                    #print(hd)
                     # self.jov.info('head direction {}\n'.format(hd))
-                    self.jov.teleport(prefix='console', target_pos=[10, 20,  0], head_direction=hd)
+                    #self.jov.teleport(prefix='console', target_pos=[10, 20,  0], head_direction=hd)
                     yield
 
 
@@ -269,7 +318,7 @@ class one_cue_task(Task):
     def __init__(self, jov):
 
         fsm = {
-                '1cue': {'touch@_dcue_000': ['1cue', self.goal_cue_touched, 'reward']} 
+                '1cue': {'touch@_dcue_000': ['parachuting', self.goal_cue_touched, 'reward']} 
               }
 
         super(one_cue_task, self).__init__(fsm, jov)
@@ -278,22 +327,28 @@ class one_cue_task(Task):
         def on_animation_finish(animation_name):
             if animation_name == 'bury':
                 self.reset()
+            if animation_name == 'parachute_fast' or animation_name == 'parachute':
+                self.state = '1cue'
+        self.jov.RD_switch('L')
 
     #---------------------------------------------------------------------------------------------------
     # Every task cycle finished, you need to reset (regenerate cue based on current coordination etc..)
     #---------------------------------------------------------------------------------------------------
     def reset(self):
         super(one_cue_task, self).reset()
+        self.state = 'parachuting'
         self._corrd_animal = self.jov._to_maze_coord(self.current_pos)[:2]
         self._coord_goal   = _cue_generate_2d_maze(self.jov.maze_border, self._corrd_animal) 
-        self.animation['_dcue_000'] = deque([ (4, self.parachute('_dcue_000', self._coord_goal)), (30, self.vibrate('_dcue_000')) ])
-        self.state = '1cue'
+        self.animation['_dcue_000'] = deque([ (4, self.parachute_fast('_dcue_000', self._coord_goal)), 
+                                              (30, self.vibrate('_dcue_000')) ])
+        self.jov.set_alpha('_dcue_000', 0.7)
 
     def goal_cue_touched(self, args):
         self.log.info(args)
         self.jov.reward(self.reward_time)
         self.transition_enable.behave = False
-        self.animation['_dcue_000'] = deque([ (4, self.bury('_dcue_000')) ])
+        # self.animation['_dcue_000'] = deque([ (4, self.bury('_dcue_000')) ])
+        self.reset()
 
 
 #------------------------------------------------------------------------------
@@ -304,19 +359,41 @@ class YMaze(Task):
     def __init__(self, jov):
 
         fsm = {
-                '1cue': {'touch@_dcue_000': ['1cue', self.goal_cue_touched, 'reward']} 
+                #'1cue': {'touch@_dcue_000': ['1cue', self.goal_cue_touched, 'reward']} 
+                '1cue': { 'touch@_dcue_000': ['1cue', self.goal_cue_touched, 'reward'], 'touch@_dcue_001': ['1cue', self.wrong_choise, 'wrong cue'] } 
               }
 
         super(YMaze, self).__init__(fsm, jov)
 
         @self.ani.connect
         def on_animation_finish(animation_name):
+            #w_pos_x=0.7*self._coord_goal[0]+0.3*self.start_location[0] 
+            #w_pos_y=-0.7*self._coord_goal[1]+0.3*self.start_location[1] 
+
+            w_pos_x=self.goal_locations[(self.side+1)%2][0] 
+            w_pos_y=self.goal_locations[(self.side+1)%2][1] 
             if animation_name == 'bury':
                 self.reset()
+            if animation_name == 's_vibrate':
+                self.jov.toggle_blanking()
+                self.jov.teleport(prefix='model', target_pos=(w_pos_x,w_pos_y,5), target_item='_dcue_001')
+                self.log.info('blanking_finished')
+            if animation_name == 'ss_vibrate':
+                self.jov.toggle_motion()
+                self.log.info('no_motion_finished')
+            if animation_name == 'parachute':
+               self.jov.teleport(prefix='model', target_pos=(w_pos_x,w_pos_y,5), target_item='_dcue_001')
+              
+        #self.goal_locations = np.array([[+85, -65], 
+        #                                [+85, +65]])
+        #self.start_location = np.array([-85, 0])
+        self.goal_locations = np.array([[+30, -40], 
+                                        [-40, +30]])
+        self.start_location = np.array([40, 40])
+        self.jov.set_alpha('_dcue_001',0) 
+        self.jov.RD_switch('L')
 
-        self.goal_locations = np.array([[-25, +35], 
-                                        [+25, +35]])
-        self.start_location = np.array([0, -35])
+        
 
     #---------------------------------------------------------------------------------------------------
     # Every task cycle finished, you need to reset (regenerate cue based on current coordination etc..)
@@ -324,7 +401,8 @@ class YMaze(Task):
     def reset(self):
         super(YMaze, self).reset()
         self._corrd_animal = self.jov._to_maze_coord(self.current_pos)[:2]
-        self._coord_goal   = self.goal_locations[int(np.random.rand(1).round()[0])] # randomly choose one of them
+        self.side=int(np.random.rand(1).round()[0])
+        self._coord_goal   = self.goal_locations[self.side] # randomly choose one of them
         self.animation['_dcue_000'] = deque([ (4, self.parachute('_dcue_000', self._coord_goal)), (30, self.vibrate('_dcue_000')) ])
         # teleport animal back to trial start location
         self.jov.teleport(prefix='console',
@@ -333,14 +411,25 @@ class YMaze(Task):
                           target_item=None)
         self.state = '1cue'
 
-
     def goal_cue_touched(self, args):
         self.log.info(args)
         self.jov.reward(self.reward_time)
         self.transition_enable.behave = False
+        self.jov.teleport(prefix='model', target_pos=(1000,1000,1000), target_item='_dcue_001')
         self.animation['_dcue_000'] = deque([ (4, self.bury('_dcue_000')) ])
 
+    def wrong_choise(self,args):
+        self.log.info(args)
+        self.jov.teleport(prefix='model', target_pos=(1000,1000,1000), target_item='_dcue_001')
+        self.jov.toggle_motion_and_blanking()
+        self.animation['_dcue_000']=deque([(30,self.s_vibrate('_dcue_000')),  (30,self.ss_vibrate('_dcue_000')) ,(30, self.vibrate('_dcue_000'))])
+        self.jov.teleport(prefix='console',
+                          target_pos=[self.start_location[0], self.start_location[1], 5],
+                          head_direction=self.jov.bmi_hd[0],
+                          target_item=None)
+        self.log.info('no_motion_blanking_start')
 
+        #self.jov.teleport(prefix='model', target_pos=(-1*self._coord_goal[0],self._coord_goal[1],5), target_item='_dcue_001')
 #------------------------------------------------------------------------------
 # one cue moving task
 #------------------------------------------------------------------------------
@@ -358,6 +447,7 @@ class one_cue_moving_task(Task):
         def on_animation_finish(animation_name):
             if animation_name == 'bury':
                 self.reset()
+        self.jov.RD_switch('L')
 
     #---------------------------------------------------------------------------------------------------
     # Every task cycle finished, you need to reset (regenerate cue based on current coordination etc..)
@@ -397,6 +487,7 @@ class two_cue_task(Task):
                 pass
             elif animation_name == 'bury':
                 self.reset()
+        self.jov.RD_switch('L')
 
     #---------------------------------------------------------------------------------------------------
     # Every task cycle finished, you need to reset (regenerate cue based on current coordination etc..)
@@ -409,6 +500,8 @@ class two_cue_task(Task):
         self.animation['_dcue_000'] = deque([ (3, self.parachute('_dcue_000', self._coord_goal)),  (30, self.vibrate('_dcue_000')) ])
         self.animation['_dcue_001'] = deque([ (3, self.parachute('_dcue_001', self._coord_guide)), (30, self.vibrate('_dcue_001')) ])
         self.state = '2cue'
+        self.jov.set_alpha('_dcue_000', 0.7)
+        self.jov.set_alpha('_dcue_001', 0.7)
 
     def warn(self, args):
         # TODO: give sound
@@ -457,7 +550,8 @@ class RING(Task):
         def on_animation_finish(animation_name):
             if animation_name == 'bury':
                 self.reset()
-
+        self.jov.RD_switch('L')
+        
     def _bmi_control(self, prefix='console', cue_name=None):
         ''' usage:
             self.animation['_dcue_001'] = deque([ (3, self.parachute('_dcue_001', self._coord_guide)), (30, self.vibrate('_dcue_001')) ])
@@ -500,22 +594,33 @@ class JEDI(Task):
         once bury animation finished, task will reset() and a new trial start (trasition_enable becomes True)
         '''
 
-        fsm = {
-                '1cue': { 'touch@_dcue_000->_dcue_001': ['1cue', self.goal_cue_touched, 'reward'] } 
+        fsm_sanity_check = {
+                '1cue': {'touch@_dcue_000': ['1cue', self.goal_cue_touched, 'reward']} 
               }
 
-        super(JEDI, self).__init__(fsm, jov)
+        super(JEDI, self).__init__(fsm_sanity_check, jov)
 
         self.BMI_enable = True
         self.reward_time = 0.01
+        self.total_reward = 0
+        self.trial_sanity_check = 0 # for sanity check
+        self.trial_to_start_BMI = 20
+        self.sanity_check_status = True
+        self.reward_threshold = self.reward_time * 2000 # 0.5 milli-liter
+        self.touch_radius = 15
+        self.onset = 0.3
+        self.max_cnt = 3750 * 3 # 3 min
+        # self.max_cnt = 200
 
         #------------------------------------------------------------------------------
-        # core of JEDI: teleport cue(`_dcue_001`) when bmi_decode event happens
+        # core of JEDI: failure trial condition
         @self.jov.connect
-        def on_bmi_update(pos):
-            if self.jov.cnt > self._last_cnt:
-                self.jov.teleport(prefix='model', target_pos=(pos[0], pos[1], 15), target_item='_dcue_001')
-            self._last_cnt = self.jov.cnt
+        def on_frame():
+            self.log.info(f'jov.cnt: {self.jov.cnt}, max_cnt: {self.max_cnt}')
+            if self.jov.cnt > self.max_cnt:
+                self.reset()
+                self.jov.cnt.fill_(0)
+                self.log.info('JEDI reset maximum time reached')
         #------------------------------------------------------------------------------
 
         @self.ani.connect
@@ -523,6 +628,7 @@ class JEDI(Task):
             if animation_name == 'bury':
                 self.reset()
 
+        self.jov.RD_switch('S')
     #---------------------------------------------------------------------------------------------------
     # Every task cycle finished, you need to reset (regenerate cue based on current coordination etc..)
     #---------------------------------------------------------------------------------------------------
@@ -530,16 +636,44 @@ class JEDI(Task):
         super(JEDI, self).reset()
         self._corrd_animal = self.jov._to_maze_coord(self.current_pos)[:2]
         self._coord_goal   = _cue_generate_2d_maze(self.jov.maze_border, self._corrd_animal) 
-        self.animation['_dcue_000'] = deque([ (3, self.parachute('_dcue_000', self._coord_goal)),  
+        self.animation['_dcue_000'] = deque([ (1, self.parachute_fast('_dcue_000', self._coord_goal)),  
                                               (32,self.vibrate('_dcue_000'))  ])
-        self.animation['_dcue_001'] = deque([ (2, self.bmi_control('model','_dcue_001'))])
-        self.animation['console']   = deque([ (2, self.go_center('console')) ])
+                                              
+        if self.trial_sanity_check > self.trial_to_start_BMI:
+            self.animation['_dcue_001'] = deque([ (2, self.bmi_control('model','_dcue_001')) ])
+            self.animation['console']   = deque([ (2, self.go_center('console')) ])
+            self.jov.set_alpha('_dcue_001', 0.5)
+            self.sanity_check_status = False
+            self.fsm = {
+                        '1cue': {'touch@_dcue_000->_dcue_001': ['1cue', self.goal_cue_touched, 'reward']}
+                       }
+            self.jov.rw_cnt.fill_(0)
+
+        self.jov.set_alpha('_dcue_000', 0.7)
         self.BMI_enable = True
         self.log.info('BMI control enabled')
         self.state = '1cue'
+        self.total_reward = 0
 
     def goal_cue_touched(self, args):
-        self.jov.reward(self.reward_time)
+
+        if self.sanity_check_status is True:
+            self.log.info(args)
+            self.jov.reward(1)
+            self.trial_sanity_check += 1
+            self.log.info('Sanity check trial: {}'.format(self.trial_sanity_check))
+            self.reset()
+            self.jov.cnt.fill_(0)
+
+        elif self.sanity_check_status is False:
+            self.refractory = np.random.randint(low=0, high=20, size=(1,))[0]/10
+            self.jov.JEDI_reward(self.reward_time, self.onset, self.refractory)
+            self.total_reward = self.total_reward + self.reward_time
+            # success trial
+            if self.total_reward > self.reward_threshold:
+                self.reset()
+                self.log.info('JEDI get more than 0.5 mL at a single location')
+                self.jov.cnt.fill_(0)
 
 
 #------------------------------------------------------------------------------
@@ -556,6 +690,13 @@ class JUMPER(Task):
         super(JUMPER, self).__init__(fsm, jov)
 
         self.BMI_enable = True
+        self.reward_time = 1
+        self.reward_total = 0
+        self.trial_to_start_BMI = 20
+        self.touch_radius = 15
+        self.max_cnt = 3750 * 1  # 1 min
+        self.sanity_check_status = True
+        self._coord_goal_prev = np.array([0, 0])
 
         #------------------------------------------------------------------------------
         # core of JUMPER: teleport itself when bmi_decode event happens
@@ -564,30 +705,54 @@ class JUMPER(Task):
             self.jov.teleport(prefix='console', target_pos=(pos[0], pos[1], 15))
         #------------------------------------------------------------------------------
 
+        #------------------------------------------------------------------------------
+        # core of JUMPER: failure trial condition
+        @self.jov.connect
+        def on_frame():
+            self.log.info(f'jov.cnt: {self.jov.cnt}, max_cnt: {self.max_cnt}')
+            if self.jov.cnt > self.max_cnt:
+                self.reset()
+                self.jov.cnt.fill_(0)
+                self.log.info('JUMPER reset as 1 minute time reached')
+        #------------------------------------------------------------------------------
+
         @self.ani.connect
         def on_animation_finish(animation_name):
             if animation_name == 'bury':
                 self.reset()
-
+        
+        self.jov.RD_switch('L')
     #---------------------------------------------------------------------------------------------------
     # Every task cycle finished, you need to reset (regenerate cue based on current coordination etc..)
     #---------------------------------------------------------------------------------------------------
     def reset(self):
         super(JUMPER, self).reset()
         self._corrd_animal = self.jov._to_maze_coord(self.current_pos)[:2]
-        self._coord_goal   = _cue_generate_2d_maze(self.jov.maze_border, self._corrd_animal) 
-        self.animation['_dcue_000'] = deque([ (4, self.parachute('_dcue_000', self._coord_goal)), (3, self.bmi_control('console')) ])
+        self._coord_goal   = _cue_generate_2d_maze(self.jov.maze_border, self._corrd_animal, self._coord_goal_prev)
+        self._coord_goal_prev = self._coord_goal
+        self.animation['_dcue_000'] = deque([ (1, self.parachute_fast('_dcue_000', self._coord_goal)), 
+                                              (32, self.vibrate('_dcue_000')) ])
+        if self.reward_total > self.trial_to_start_BMI:
+            self.animation['console'] = deque([ (3, self.bmi_control('console')) ])
+            self.sanity_check_status = False
+        if self.sanity_check_status:
+            self.jov.rw_cnt.fill_(0)
         self.BMI_enable = True
+        self.jov.set_alpha('_dcue_000', 0.7)
         self.log.info('BMI control enabled')
         self.state = '1cue'
 
     def goal_cue_touched(self, args):
         self.log.info(args)
         self.jov.reward(self.reward_time)
+        self.reward_total += 1
+        self.log.info('JUMPER total reward: {}'.format(self.reward_total))
         self.transition_enable.behave = False
         self.BMI_enable = False
         self.log.info('BMI control disabled')
-        self.animation['_dcue_000'] = deque([ (4, self.bury('_dcue_000')) ])
+        # self.animation['_dcue_000'] = deque([ (4, self.bury('_dcue_000')) ])
+        self.reset()
+        self.jov.cnt.fill_(0)
 
 
 if __name__ == '__main__':

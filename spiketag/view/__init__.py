@@ -1,0 +1,1 @@
+from .color_scheme import palette

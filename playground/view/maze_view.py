@@ -9,6 +9,15 @@ In a loaded VR Maze
 """
 
 import os
+import ctypes
+
+if os.name == 'nt': # Only runs on Windows
+    try:
+        # Tell Windows to treat this app as DPI aware (no OS scaling)
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        pass
+
 import numpy as np
 from vispy import app, gloo, visuals, scene
 from vispy.util import keys
@@ -65,7 +74,6 @@ class maze_view(scene.SceneCanvas):
         self.cues_height = {}
         self._selected_cue = None
 
-
         ### 3. replay
         self.replay_current_pos = scene.visuals.Markers(parent=self.view.scene)
         self.replay_current_pos.set_data(np.array([0,0,0]).reshape(-1,3))
@@ -85,6 +93,10 @@ class maze_view(scene.SceneCanvas):
         # self._timer.start(0.8)
         self.global_i = 0
 
+        ### random walk timer, update each 100 ms
+        self._random_walk_timer = app.Timer()
+        self._random_walk_timer.connect(self.on_random_walk_timer)
+        self._random_walk_step = 0
 
         ### 4. background and fields
         self.image_background = scene.visuals.Image(parent=self.view.scene, method='subdivide')
@@ -92,11 +104,54 @@ class maze_view(scene.SceneCanvas):
         self.image = scene.visuals.Image(parent=self.view.scene, method='subdivide', cmap='hot', clim=[0.025, 0.3])
         self.image.transform = STTransform()
 
+        ### 5. distance check
+        self.goal_distances = f'Distances: 0, 0, 0'
+        self.goal_distances_text = scene.visuals.Text(parent=self.scene)
+        self.goal_distances_text.text = self.goal_distances
+        self.goal_distances_text.pos = np.array([130, 30])
+        self.goal_distances_text.color = (1, 1, 1, 0.7)
+        self.goal_distances_text.font_size = 10
+        self._goal_distance_timer = app.Timer()
+        self._goal_distance_timer.connect(self.check_goal_distance)
+        self._goal_distance_timer.start(0.1)
+
         # self.set_range()
         # self.freeze()
         ### first person view
         self.fpv = False
 
+    def check_goal_distance(self, event):
+        if self.current_pos is not None:
+            try:
+                animal_pos = self.maze_2_real_pos(self.current_pos[:2])
+                cue0_pos = self.cues['_dcue_000'].pos[:2]
+                cue1_pos = self.cues['_dcue_001'].pos[:2]
+                self.goal_distances = (np.linalg.norm(animal_pos-cue0_pos),
+                                    np.linalg.norm(animal_pos-cue1_pos),
+                                    np.linalg.norm(cue0_pos-cue1_pos))
+                self.goal_distances_text.text = f'Distances: {self.goal_distances[0]:.1f}, {self.goal_distances[1]:.1f}, {self.goal_distances[2]:.1f}'
+            except:
+                pass
+
+    def random_walk(self, n_steps=10000, init_pos=[0, 0], max_speed=10, dt=0.1, smooth_factor=5):
+        if self.current_pos is not None:
+            init_pos = self.maze_2_real_pos(self.current_pos)
+        self.random_walk_pos, self.random_walk_hd, v = randomwalk2D(n_steps, init_pos,
+                                                                    x_range=self.x_range_real,
+                                                                    y_range=self.y_range_real,
+                                                                    max_speed=max_speed,
+                                                                    smooth_factor=smooth_factor,
+                                                                    dt=dt)
+        self._random_walk_timer.start(dt)
+
+    def on_random_walk_timer(self, event):
+        if self._random_walk_step >= len(self.random_walk_pos):
+            self._random_walk_timer.stop()
+            self._random_walk_step = 0
+        else:
+            self.current_pos = self.real_2_maze_pos(self.random_walk_pos[self._random_walk_step])
+            self.current_hd  = self.random_walk_hd[self._random_walk_step]%360 + 90
+            self._random_walk_step += 1
 
     def load_all(self):
         base_folder = os.path.dirname(maze.__file__)
@@ -127,6 +182,8 @@ class maze_view(scene.SceneCanvas):
         self.origin    = -np.array(self.maze.coord['Origin']).astype(np.float32) * self.scale_factor
         self.origin_hd = np.arctan2(-self.origin[1], self.origin[0])/np.pi*180
         self.border  = np.array(self.maze.coord['border']).astype(np.float32)
+        self.x_range_real = self.border[[0,2]]
+        self.y_range_real = self.border[[1,3]]
         self.x_range = (self.origin[0]+self.border[0]*self.scale_factor, self.origin[0]+self.border[2]*self.scale_factor)
         self.y_range = (self.origin[1]+self.border[1]*self.scale_factor, self.origin[1]+self.border[3]*self.scale_factor)
         self._arrow_len = (self.x_range[1]-self.x_range[0])/10
@@ -140,7 +197,9 @@ class maze_view(scene.SceneCanvas):
             self.mirror = True
             transform.matrix[:,2] = - transform.matrix[:,2]  # reflection matrix, mirror image on x-y plane
         transform.scale(scale=4*[self.scale_factor]) # scale at all 4 dim for scale_factor
-        transform.translate(pos=self.origin) # translate to origin
+        # transform.translate(pos=self.origin) # translate to origin
+        transform.translate(self.origin)
+
 
         self.maze.transform = transform 
         self.view.add(self.maze)
@@ -186,7 +245,6 @@ class maze_view(scene.SceneCanvas):
                 _cue_default_offset = self.cues[target_item]._xy_center*self.cues[target_item]._scale_factor
                 self.cues[target_item]._transform.translate = self._to_jovian_coord(target_pos).astype(np.float32) - _cue_default_offset
 
-
     def cue_update(self):
         with Timer('cue_update', verbose = False):
             for cue_name, cue_pos in self.shared_cue_dict.items():
@@ -194,7 +252,7 @@ class maze_view(scene.SceneCanvas):
                 _cue = self.cues[cue_name]
                 # [1,1,-1] because of mirror image of projection
                 _cue._transform.translate = np.array([1,1,-1])*cue_pos - _cue._xy_center*_cue._scale_factor
-
+                _cue._pos = cue_pos # update the pos of the cue for `check_goal_distance`
 
     def set_file(self, file):
         self.unfreeze()
@@ -313,6 +371,16 @@ class maze_view(scene.SceneCanvas):
             self.view.camera.view_changed()
 
     @property
+    def real_pos(self):
+        return (self.pos-self.origin[:2])/self.scale_factor
+
+    def maze_2_real_pos(self, pos):
+        return (pos-self.origin[:2])/self.scale_factor
+
+    def real_2_maze_pos(self, pos):
+        return (pos*self.scale_factor)+self.origin[:2]
+
+    @property
     def current_hd(self):
         return self._current_hd
 
@@ -321,15 +389,14 @@ class maze_view(scene.SceneCanvas):
         self._current_hd = hd_in # absolute value from rotation encoder
         try:
             _current_hd_calibrated = hd_in - 90 # point ahead (0 towards the upper board, 90 towards the right board)
-            arrow_delta = np.array([np.cos(_current_hd_calibrated/360*np.pi*2), 
-                                    np.sin(_current_hd_calibrated/360*np.pi*2)]).ravel()
+            self.arrow_delta = np.array([np.cos(_current_hd_calibrated/360*np.pi*2), 
+                                         np.sin(_current_hd_calibrated/360*np.pi*2)]).ravel()
             arrow = np.vstack(( self.current_pos[:2], 
-                                self.current_pos[:2] + self._arrow_len * arrow_delta ))
+                                self.current_pos[:2] + self._arrow_len * self.arrow_delta ))
             assert(arrow.shape==(2,2)) # first row is current_pos, arrow_delta point into the head direction
             self.arrow.set_data(arrow)
         except:
             pass
-
 
     @property
     def arrow_len(self):
@@ -407,24 +474,63 @@ class maze_view(scene.SceneCanvas):
         ''' Convert mouse click into Jovian coordination
             mouse_pos is 4 element array that reflects user mouse click position
         '''
+        # with Timer('imap', verbose=False):
+        #     # Return the transform that maps from the coordinate system of grid to the local coordinate system of node (view).
+        #     # The below three transform are the same
+        #     # tr = self.view.camera._scene_transform
+        #     # tr = self.grid.node_transform(self.view)
+        #     tr = self.view.scene.transform
+        #     rayPoint = tr.imap(mouse_pos)[:3]
+        #     rayDirection = self.view.camera.transform.matrix[2][:3]
+        #     if self.ray_vector_visible:
+        #         u = generate_line(rayPoint, rayDirection)
+        #         self.ray_vector.set_data(pos=u, width=1, color='green')
+
+        #     planePoint = (0,0,0) # or self.origin
+        #     planeDirection = (0,0,1) # project to xyplane where z=0: (0,0,1) has null space `z=0`
+        #     jovian_pos = line_plane_intersection(rayDirection, rayPoint, planeDirection, planePoint)
+        #     maze_pos = self._to_maze_coord(jovian_pos)
+        #     return maze_pos
+
+    def imap(self, mouse_pos):
+        ''' Convert mouse click into Jovian coordination
+            mouse_pos is 4 element array that reflects user mouse click position
+        '''
         with Timer('imap', verbose=False):
             # Return the transform that maps from the coordinate system of grid to the local coordinate system of node (view).
-            # The below three transform are the same
+            # The below three transform are the same(these are actually moving, but it’s in a "Normalized" space (notice the $w$ value is 0.0915)).
             # tr = self.view.camera._scene_transform
             # tr = self.grid.node_transform(self.view)
             tr = self.view.scene.transform
-            rayPoint = tr.imap(mouse_pos)[:3]
-            rayDirection = self.view.camera.transform.matrix[2][:3]
-            if self.ray_vector_visible:
-                u = generate_line(rayPoint, rayDirection)
-                self.ray_vector.set_data(pos=u, width=1, color='green')
+            
+            # tr=self.view.scene.node_transform(self.view.canvas) desont exit
+            # tr=self.view.get_transform('canvas', 'visual') is only giving you Canvas (pixel) coordinates. It’s ignoring the 3D world entirely.
+            # tr = self.view.camera.transform is giving you the Camera's position in world units, but because it lacks the "Projection" (the lens), it thinks every pixel is the same point in space.
+            # 2. Map two points to create a 3D Ray (Near plane and Far plane)
+            # We use z=0 and z=1 to define the start and end of the click "line"
+            p_near_raw = tr.imap(list(mouse_pos) + [0, 1])
+            p_far_raw  = tr.imap(list(mouse_pos) + [1, 1])
 
-            planePoint = (0,0,0) # or self.origin
-            planeDirection = (0,0,1) # project to xyplane where z=0: (0,0,1) has null space `z=0`
-            jovian_pos = line_plane_intersection(rayDirection, rayPoint, planeDirection, planePoint)
-            maze_pos = self._to_maze_coord(jovian_pos)
+            # 3. Perspective Divide (The "Inflation" step)
+            # This turns 11,000 into 130,000
+            p_near = p_near_raw[:3] / p_near_raw[3]
+            p_far  = p_far_raw[:3] / p_far_raw[3]
+
+            # 4. Ray-Plane Intersection (find where the click hits the floor Z=0)
+                # Formula: Point = p_near + t * (p_far - p_near)
+            rayDirection = p_far - p_near
+            if abs(rayDirection[2]) < 1e-6: # Avoid division by zero if looking horizontally
+                    return p_near
+            # if self.ray_vector_visible:
+            #     u = generate_line(rayPoint, rayDirection)
+            #     self.ray_vector.set_data(pos=u, width=10, color='green')
+            # Solve for t where Z = 0
+            # p_near.z + t * ray_dir.z = 0  =>  t = -p_near.z / ray_dir.z
+            t = -p_near[2] / rayDirection[2]
+            intersection = p_near + t * rayDirection
+            # jovian_pos = line_plane_intersection(rayDirection, rayPoint, planeDirection, planePoint)
+            maze_pos = self._to_maze_coord(intersection)
             return maze_pos
-
 
     def _to_maze_coord(self, pos):
         '''transform back to maze coord (0,0,0)
@@ -454,11 +560,17 @@ class maze_view(scene.SceneCanvas):
         self.jov = jov
         mgr = multiprocessing.Manager()
         self.shared_cue_dict = mgr.dict()
+        for cue_name in self.cues.keys():
+            self.shared_cue_dict[cue_name] = None
         self.jov.set_trigger(self.shared_cue_dict)
         self.jov.shared_cue_height = self.cues_height
         self.jov._to_maze_coord = self._to_maze_coord
         self.jov._to_jovian_coord = self._to_jovian_coord
         self.is_jovian_connected = True
+        self.jov.maze_origin = self.origin
+        self.jov.maze_scale = self.scale_factor
+        self.jov.log.info('jov acquire maze_origin as: %s' % str(self.jov.maze_origin))
+        self.jov.log.info('jov acquire maze_scale as: %s' % str(self.jov.maze_scale))
 
         # @self.jov.connect
         # def on_cue(cue_id, func, args):

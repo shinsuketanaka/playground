@@ -4,17 +4,17 @@
 import sys
 import time
 from PyQt5.QtWidgets import QApplication
-from .gui import play_raster_GUI
-from .base import create_logger, Fpga, logger
+from .gui import NAV_GUI
 from spiketag.realtime import BMI
-from spiketag.base import probe
 import numpy as np
+import torch
 import pandas as pd
 from spiketag.analysis import *
 from spiketag.analysis.decoder import NaiveBayes
+from spiketag.analysis.decoder import load_model_and_config
+from .base import logger
 
-bin_size, B_bins, t_smooth = 100e-3, 8, 3
-pos_buffer_len = int(t_smooth / bin_size)
+
 two_steps_decoding = False
 
 def normalize_pos(pos, scale):
@@ -27,44 +27,65 @@ def normalize_pos(pos, scale):
     # pos = (pos - np.mean(pos,axis=0))
     return pos
 
-def run(bmi_update_rule, posterior_threshold, bmi_mode):
-    playground_log = create_logger()
+def run_experiment(bmi_update_rule, posterior_threshold, bmi_mode):
     app = QApplication(sys.argv)
+    # bmi=None
     if bmi_mode:
-        bmi = BMI(fetfile='./fet.bin')
+        bmi = BMI(spike_df_file='./decoder/spike_df.pkl')
         bmi.bmi_update_rule = bmi_update_rule
         bmi.posterior_threshold = posterior_threshold
-        bmi.pos_buffer_len = pos_buffer_len # position buffer length for moving average
         bmi.two_steps = two_steps_decoding
-        bmi.set_binner(bin_size=bin_size, B_bins=B_bins)
     else:
         bmi = None
-    gui = play_raster_GUI(logger=playground_log, bmi=bmi)
+    gui = NAV_GUI(bmi=bmi)
     gui.show()
     sys.exit(app.exec_())
 
-def build_decoder(bmi, spktag_file, pos_file):
+def build_decoder(bmi,pos_file):
     # For Lab
     log = logger(pos_file)  # pos_file is process.log
-    pc = log.to_pc(bin_size=4, v_cutoff=4)
-    # pc.align_with_recording(0, ephys_end_time)  # check if this is necessary in lab test
-    # pc.initialize()
-    pc.load_spkdf(spktag_file)
-    # check and store the cross-validation score
-    _, score = pc.to_dec(t_step=bin_size, t_window=bin_size*B_bins, t_smooth=t_smooth, 
-                           first_unit_is_noise=True, peak_rate=1, firing_rate_modulation=True, verbose=True,
-                           training_range = [0.00, 0.50],
-                           testing_range  = [0.50, 1.00])
+    # pc = log.to_pc(bin_size=4, v_cutoff=4)
+    # # pc.align_with_recording(0, ephys_end_time)  # check if this is necessary in lab test
+    # # pc.initialize()
+    # pc.load_spkdf(spktag_file)
+    # # check and store the cross-validation score
+    # _, score = pc.to_dec(t_step=bin_size, t_window=bin_size*B_bins, t_smooth=t_smooth, 
+    #                        first_unit_is_noise=True,  min_bit=0.1, min_peak_rate=0.8, 
+    #                        firing_rate_modulation=True, verbose=True,
+    #                        training_range = [0.00, 0.60],
+    #                        testing_range  = [0.60, 1.00],
+    #                        low_speed_cutoff = {'training': True, 'testing': True})
 
-    # use the full recorded data (meaning no cross-validaton) for BMI 
-    dec, _ = pc.to_dec(t_step=bin_size, t_window=bin_size * B_bins, t_smooth=t_smooth,
-                           first_unit_is_noise=True, peak_rate=1, firing_rate_modulation=True, verbose=False,
-                           training_range = [0.00, 1.00],
-                           testing_range  = [0.00, 1.00])
-
-    bmi.set_decoder(dec, dec_file='dec')
-    bmi.mean_firing_rate = np.mean(dec.train_X[:, dec.neuron_idx])  # average firing rate of all cells over all time bins
-    return score
+    # # use the full recorded data (meaning no cross-validaton) for BMI 
+    # dec, _ = pc.to_dec(t_step=bin_size, t_window=bin_size*B_bins, t_smooth=t_smooth, 
+    #                        first_unit_is_noise=True,  min_bit=0.1, min_peak_rate=0.8, 
+    #                        firing_rate_modulation=True, verbose=True,
+    #                        training_range = [0.00, 1.00],
+    #                        testing_range  = [0.00, 1.00],
+    #                        low_speed_cutoff = {'training': True, 'testing': True})
+    # dec = torch.load(dec_file)
+    dec, neuron_idx = load_model_and_config('./decoder/model_weights.pt', './decoder/model_config.yaml')
+    dec.neuron_idx = neuron_idx 
+    dec.model.cuda()
+    dec.pc=log.to_pc(bin_size=4, v_cutoff=4)
+    bmi.set_binner(bin_size=dec.t_step, B_bins=dec.B_bins) # ! set binner to get real time scv correctly
+    bmi.set_decoder(dec)
+    bmi.pos_buffer_len = 20#dec.smooth_factor # ! position buffer length for moving average
+    # bmi.mean_firing_rate = np.mean(dec.train_X[:, dec.neuron_idx])  # average firing rate of all cells over all time bins
+    
+    # @bmi.binner.connect
+    # def on_decode(X):
+    #     print(X.shape)
+    #     print(type(X))
+    #     print(X.dtype)
+    #     f_scv = open('./scv.bin', 'ab+')
+    #     f_scv.write(X.tobytes())
+    #     f_scv.close()
+    #     y = bmi.dec.model.predict_rt(
+    #         X, bmi.dec.neuron_idx, cuda=False, mode='eval', bn_momentum=0.9)
+    #     print(y)
+    
+    # return dec.score
 
     # For test: Using Brian's data to test system
     # dusty_pos = pd.read_pickle(pos_file)
@@ -82,4 +103,4 @@ def build_decoder(bmi, spktag_file, pos_file):
     # bmi.set_decoder(dec, dec_file='dec')
 
 if __name__ == '__main__':
-    run()
+    run_experiment()

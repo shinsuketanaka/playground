@@ -27,6 +27,11 @@ class TestPlayground(unittest.TestCase):
         """Test the CLI."""
         runner = CliRunner()
         result = runner.invoke(cli.main)
+        if result.exit_code != 0:
+            print(result.output)      # Shows what was printed to stdout/stderr
+            print(result.exception)   # Shows the exception object
+            import traceback
+            traceback.print_exception(*result.exc_info) # Shows the full stack trace
         assert result.exit_code == 0
         assert 'playground.cli.main' in result.output
         help_result = runner.invoke(cli.main, ['--help'])

@@ -210,6 +210,8 @@ def _core_jovian_process(touch_radius, shared_cue_dict, direction, cnt, current_
             if syncer != 'Jovian':
                 data = read_task.read(number_of_samples_per_channel=-1)
             if syncer == 'Jovian':
+                if sync_count==0:
+                    start_loop=time()
                 if time()-start_loop>SEQUENCE_S:
                     start_loop=time()
                     loop_state=True
@@ -217,7 +219,7 @@ def _core_jovian_process(touch_radius, shared_cue_dict, direction, cnt, current_
                     if time()-start_loop>=TRIGGER_S[sync_count%len(TRIGGER_S)]:
                         if not end_pulse:
                             data=[1]
-                            End_pulse=TRIGGER_S[sync_count%len(TRIGGER_S)]+PULSE_S
+                            end_pulse=TRIGGER_S[sync_count%len(TRIGGER_S)]+PULSE_S
                         else:
                             print("pulse length is too long")
     
@@ -276,7 +278,7 @@ def _core_jovian_process(touch_radius, shared_cue_dict, direction, cnt, current_
             if syncer != 'EXT':
                 write_task.start()
             if syncer == 'Jovian':
-                start_loop = time()
+                start_loop = 0
     
         
             while True:
@@ -322,6 +324,9 @@ def _core_jovian_process(touch_radius, shared_cue_dict, direction, cnt, current_
             event_queue.put(('log_warn',f"Subprocess error: {e}"))
         finally:
             # THIS IS THE CRITICAL PART
+            if syncer != 'EXT':
+                task_write(False)
+            
             if soc_input:
                 print("Closing Jovian socket and MSA...")
                 soc_input.shutdown(socket.SHUT_RDWR)
